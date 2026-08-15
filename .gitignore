@@ -1,0 +1,26 @@
+# build stuff
+build/
+bin/
+*.o
+*.out
+*.exe
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# data / local db
+*.db
+*.sqlite
+*.sqlite3
+data/processed/
+logs/
+
+# editor junk
+.DS_Store
+.idea/
+.vscode/
+*~
