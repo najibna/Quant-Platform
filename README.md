@@ -1,45 +1,104 @@
 # Quant Platform
 
-Distributed quantitative research and low-latency trading stack built with **C++**, **Python**, and **SQL**.
+**Distributed quantitative research platform & low-latency trading engine**  
+C++ · Python · SQL · Linux · Multithreading · Distributed Systems
 
-The platform ingests market data, runs a multithreaded trading engine, backtests strategies, computes statistics, and profiles end-to-end latency. Research workloads can be split across worker processes for parallel analysis.
+A systems-oriented quant stack for market-data processing, strategy research, backtesting, and execution-path latency measurement. Built to mirror the core loop used in systematic trading: **ingest → signal → execute → measure → iterate**.
 
-## Features
+---
 
-- **Market data ingest** — load tick data from CSV into SQLite
-- **Low-latency trading engine** — multithreaded C++ pipeline for feed handling, signal evaluation, and order execution
-- **Strategy backtesting** — Python tooling for mean-reversion signals and PnL reporting
-- **Statistics** — price summary metrics computed in C++ research workers
-- **Latency profiling** — per-stage timing (feed / signal / order) with SQL persistence
-- **Distributed research** — fan-out tick ranges across multiple worker processes
+## Overview
+
+This repository implements two tightly coupled layers:
+
+| Layer | Focus |
+|-------|--------|
+| **Quant Research Platform** | Distributed tick processing, statistical aggregation, strategy backtests, and result persistence in SQL |
+| **Low-Latency Trading Engine** | Multithreaded C++ runtime that ingests market data, evaluates signals, executes orders, and profiles per-stage latency |
+
+The design emphasizes clean separation of concerns, measurable performance, and a research workflow that can scale across worker processes.
+
+---
+
+## Capabilities
+
+### Market Data & Storage
+- Tick-level ingest from CSV into a structured SQL schema (`ticks`, `orders`, `backtests`, `latency`, `research_stats`)
+- Deterministic replay of historical prints for engine and research paths
+
+### Low-Latency Trading Engine (C++)
+- Three-stage concurrent pipeline: **feed → signal → order**
+- Thread-safe queues with mutex-guarded handoff between stages
+- Online signal evaluation (EMA-based mean reversion)
+- High-resolution latency instrumentation (`std::chrono`) on every stage
+- Export of fills and nanosecond-level timing samples for offline analysis
+
+### Quantitative Research (C++ / Python)
+- Parallel research workers that partition tick ranges across processes
+- Price statistics (mean, stdev, min/max, count) computed in native C++
+- Python strategy tooling for signal generation and backtest PnL / win-rate reporting
+- SQL-backed experiment logging for reproducible research runs
+
+### Observability
+- Per-stage latency summaries (count, average, min, max)
+- Persist latency and research outputs to SQLite for post-run inspection
+
+---
+
+## Architecture
+
+```
+                         ┌──────────────────────────────┐
+                         │     Market Data (CSV)        │
+                         └──────────────┬───────────────┘
+                                        │
+                    ┌───────────────────┼───────────────────┐
+                    ▼                                       ▼
+           Python Ingest                            C++ Trading Engine
+           (SQL warehouse)                    ┌──────┼──────┐
+                    │                      feed   signal  order
+                    │                      thread thread  thread
+                    ▼                           │
+              SQLite store                      ▼
+           ticks / backtests            fills + latency samples
+           research_stats                       │
+                    ▲                           ▼
+                    │                    Python reports / SQL
+           C++ Research Workers
+           (partitioned jobs)
+```
+
+**Engine concurrency model:** producer/consumer stages run on dedicated threads; the feed thread publishes ticks, the signal thread evaluates alpha, and the order thread simulates execution while a shared profiler records stage timings.
+
+**Distributed research model:** a coordinator fans out `[start, end)` tick slices to `N` worker processes; each worker writes local statistics that are aggregated into SQL.
+
+---
 
 ## Tech Stack
 
-| Area | Tools |
-|------|--------|
-| Engine & workers | C++17, pthreads |
-| Tooling | Python 3 |
-| Storage | SQLite |
-| Build | Make |
-| OS target | Linux / macOS |
+| Domain | Implementation |
+|--------|----------------|
+| Execution / workers | C++17, pthreads, high-resolution clocks |
+| Research tooling | Python 3 (stdlib) |
+| Persistence | SQLite |
+| Build / orchestration | Make, Bash |
+| Target environment | Linux / macOS |
 
-## Project Layout
+---
+
+## Repository Layout
 
 ```
-cpp/        Trading engine and research workers
-python/     Ingest, signals, backtest, and reporting
-sql/        Database schema
-data/       Sample market data
-scripts/    Demo and distributed research runners
+cpp/
+  include/     engine, market data, stats, latency, worker interfaces
+  src/         trading engine, research workers, entrypoints
+python/        ingest, signals, backtest, latency report, SQL helpers
+sql/           schema for ticks, orders, backtests, latency, research
+data/          sample tick dataset
+scripts/       end-to-end demo and distributed research runner
 ```
 
-## Requirements
-
-- `g++` with C++17 support
-- Python 3
-- SQLite 3
-
-No third-party Python packages are required (stdlib only).
+---
 
 ## Build
 
@@ -47,59 +106,44 @@ No third-party Python packages are required (stdlib only).
 make
 ```
 
-This produces:
+Artifacts:
 
-- `bin/engine` — multithreaded trading engine
-- `bin/worker` — research worker for distributed jobs
+- `bin/engine` — multithreaded trading engine with latency profiling
+- `bin/worker` — research worker for distributed statistical jobs
 
-## Quick Start
+Requires: `g++` (C++17), Python 3, SQLite 3.
 
-Run the full demo:
+---
+
+## Run
+
+Full pipeline (ingest → engine → backtest → distributed research):
 
 ```bash
 ./scripts/run_platform.sh
 ```
 
-Or step through individually:
+Individual stages:
 
 ```bash
-# ingest sample ticks into sqlite
 python3 python/ingest.py
-
-# run the trading engine
 ./bin/engine data/sample_ticks.csv
-
-# persist orders and print latency summary
 python3 python/store_results.py orders
 python3 python/latency_report.py
-
-# backtest
 python3 python/backtest.py AAPL
-
-# distributed research workers
 ./scripts/run_research.sh
 ```
 
-## Architecture
+---
 
-```
-CSV ticks ──► Python ingest ──► SQLite
-                 │
-                 ▼
-         C++ Trading Engine
-      ┌─────────┼─────────┐
-   feed      signal      order
-   thread    thread      thread
-                 │
-                 ▼
-        orders + latency CSVs
-                 │
-                 ▼
-         Python reports / SQL
+## Design Notes
 
-Research path:
-  coordinator ──► worker 0..N ──► research_stats (SQL)
-```
+- **Latency as a first-class metric** — every hot-path stage is timed in nanoseconds and persisted for analysis
+- **Research / production split** — Python owns experimentation and reporting; C++ owns the performance-sensitive path
+- **Horizontal research fan-out** — workloads shard by tick range across processes, similar in spirit to batch research grids
+- **Reproducibility** — schema-backed storage of orders, backtests, latency, and worker statistics
+
+---
 
 ## License
 
